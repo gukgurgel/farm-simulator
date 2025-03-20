@@ -1,10 +1,13 @@
-import React, { useState, useEffect, useRef } from 'react';
+// components/TimelineControls.tsx - Updated version
+import React, { useState, useEffect } from 'react';
+import WeatherInfo from './WeatherInfo';
 
-const TimelineControls = ({ controller, totalDays }) => {
+const TimelineControls = ({ controller, totalDays, location }) => {
   const [currentDay, setCurrentDay] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [dayInfo, setDayInfo] = useState(null);
   const [speed, setSpeed] = useState(1);
+  const [showWeatherPanel, setShowWeatherPanel] = useState(false);
   
   // Handle slider change
   const handleSliderChange = (e) => {
@@ -69,9 +72,17 @@ const TimelineControls = ({ controller, totalDays }) => {
     }
   };
   
+  // Format weather name for display
+  const formatWeatherName = (weather) => {
+    if (!weather) return '';
+    return weather.split('_').map(word => 
+      word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()
+    ).join(' ');
+  };
+  
   return (
     <div className="fixed top-16 left-0 right-0 bg-green-800 text-white p-2 shadow-lg z-10">
-      <div className="max-w-screen-xl mx-auto">
+      <div className="max-w-screen-xl mx-auto relative">
         {/* Day info */}
         {dayInfo && (
           <div className="flex justify-between items-center mb-2">
@@ -80,9 +91,9 @@ const TimelineControls = ({ controller, totalDays }) => {
             </div>
             
             <div className="flex space-x-6">
-              <div className="flex items-center">
+              <div className="flex items-center cursor-pointer" onClick={() => setShowWeatherPanel(!showWeatherPanel)}>
                 <span className="mr-1">{getWeatherIcon(dayInfo.weather)}</span>
-                <span className="hidden sm:inline">{dayInfo.weather.replace('_', ' ')}</span>
+                <span className="hidden sm:inline">{formatWeatherName(dayInfo.weather)}</span>
               </div>
               
               <div className="flex items-center">
@@ -101,6 +112,13 @@ const TimelineControls = ({ controller, totalDays }) => {
                 <span className="ml-1">({Math.round(dayInfo.growthPercent * 100)}%)</span>
               </div>
             </div>
+          </div>
+        )}
+        
+        {/* Weather info panel - conditionally shown */}
+        {showWeatherPanel && dayInfo && (
+          <div className="absolute right-0 top-10 z-20 w-64">
+            <WeatherInfo dayInfo={dayInfo} location={location} />
           </div>
         )}
         

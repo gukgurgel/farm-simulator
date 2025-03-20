@@ -1,7 +1,8 @@
 'use client'
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import SimulationInfo from './SimulationInfo';
+import LocationInput from './LocationInput';
 
 const SimulationForm = ({ onStartSimulation }) => {
   // Default polygon for a square field
@@ -17,8 +18,20 @@ const SimulationForm = ({ onStartSimulation }) => {
   const [hectares, setHectares] = useState(2.5);
   const [polygonInput, setPolygonInput] = useState(defaultPolygon);
   const [plantDensity, setPlantDensity] = useState(70);
+  const [latitude, setLatitude] = useState(39.8283); // Default to central US
+  const [longitude, setLongitude] = useState(-98.5795);
+  const [locationName, setLocationName] = useState('United States (default)');
+  const [useRealWeather, setUseRealWeather] = useState(true);
+  const [apiKey, setApiKey] = useState(process.env.NEXT_PUBLIC_OPENWEATHER_API_KEY || '');
   const [error, setError] = useState('');
   const [isSimulating, setIsSimulating] = useState(false);
+  
+  // Handle location change from LocationInput component
+  const handleLocationChange = (lat, lon, name) => {
+    setLatitude(lat);
+    setLongitude(lon);
+    setLocationName(name);
+  };
   
   // Start simulation with provided parameters
   const handleSubmit = (e) => {
@@ -55,7 +68,16 @@ const SimulationForm = ({ onStartSimulation }) => {
         type: cropType,
         hectares: parseFloat(hectares),
         density: parseInt(plantDensity),
-        polygon: polygon
+        polygon: polygon,
+        location: {
+          latitude: latitude,
+          longitude: longitude,
+          name: locationName
+        },
+        weatherSettings: {
+          useRealWeather: useRealWeather,
+          apiKey: apiKey
+        }
       });
       
     } catch (err) {
@@ -118,6 +140,51 @@ const SimulationForm = ({ onStartSimulation }) => {
           />
         </div>
         
+        {/* Location Settings */}
+        <div className="mb-4 bg-green-600 p-3 rounded">
+          <h3 className="text-white text-sm font-bold mb-2">Location & Weather</h3>
+          
+          <div className="flex items-center mb-2">
+            <input
+              type="checkbox"
+              id="use-real-weather"
+              checked={useRealWeather}
+              onChange={(e) => setUseRealWeather(e.target.checked)}
+              className="mr-2"
+            />
+            <label htmlFor="use-real-weather" className="text-white text-sm">
+              Use location-based weather patterns
+            </label>
+          </div>
+          
+          {useRealWeather && (
+            <div className="bg-green-800 p-2 rounded mb-2">
+              <LocationInput 
+                onLocationChange={handleLocationChange}
+                disabled={isSimulating}
+              />
+            </div>
+          )}
+          
+          {useRealWeather && !process.env.NEXT_PUBLIC_OPENWEATHER_API_KEY && (
+            <div className="mb-3">
+              <label className="block text-white text-xs">
+                OpenWeatherMap API Key (optional):
+                <input
+                  type="text"
+                  className="w-full p-1 mt-1 rounded border border-gray-300 text-sm"
+                  value={apiKey}
+                  onChange={(e) => setApiKey(e.target.value)}
+                  placeholder="Enter your API key"
+                />
+              </label>
+              <p className="text-xs text-gray-200 mt-1">
+                Without an API key, the simulation will use generated weather data based on location and general climate patterns.
+              </p>
+            </div>
+          )}
+        </div>
+        
         {/* Polygon Input */}
         <div className="mb-4">
           <label className="block text-white text-sm font-medium mb-1">
@@ -125,7 +192,7 @@ const SimulationForm = ({ onStartSimulation }) => {
           </label>
           <textarea
             className="w-full p-2 rounded border border-gray-300 font-mono text-sm"
-            rows="8"
+            rows="6"
             value={polygonInput}
             onChange={(e) => setPolygonInput(e.target.value)}
             placeholder='[[-50,0,-50],[-50,0,50],[50,0,50],[50,0,-50]]'
@@ -140,9 +207,9 @@ const SimulationForm = ({ onStartSimulation }) => {
         <button
           type="submit"
           className="w-full p-3 bg-green-600 text-white rounded hover:bg-green-500 focus:outline-none focus:ring-2 focus:ring-green-400"
-          disabled={isSimulating && !error}
+          disabled={isSimulating}
         >
-          {isSimulating && !error ? 'Simulating...' : 'Start Simulation'}
+          {isSimulating ? 'Simulating...' : 'Start Simulation'}
         </button>
       </form>
       

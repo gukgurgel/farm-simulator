@@ -1,5 +1,12 @@
+// lib/simulation/timeline.ts - Updated version with location-based weather
+
 import * as THREE from 'three';
-import { generateWeatherData, applyWeatherToScene, RainSystem } from '../weather';
+import { 
+  generateHistoricalWeather, 
+  convertToSimulationWeatherDays,
+  WEATHER_TYPES 
+} from '../weather/weatherService';
+import { applyWeatherToScene, RainSystem } from '../weather';
 import { PLANT_HEIGHTS } from '../crops';
 
 // Growth stage modifiers (0-1) for different growth phases
@@ -18,58 +25,190 @@ const GROWTH_STAGES = {
  * @returns {Object} Timeline data
  */
 export const createCropTimeline = (cropData, startDate = new Date(), days = 90) => {
-  const { type, hectares, density } = cropData;
+  const { type, hectares, density, location } = cropData;
   
-  // Generate weather data for the entire timeline
-  const weatherData = generateWeatherData(days, startDate);
-  
-  // Calculate cumulative growth factors for each day
-  const timelineData = weatherData.map((day, index) => {
-    // Base growth percentage based on day number (simplified s-curve growth)
-    const dayRatio = day.dayNumber / days;
-    let baseGrowth;
-    
-    // Start with visible plants (at least 20% growth)
-    if (dayRatio < 0.2) {
-      // Initial growth starts at 20% (seedling stage)
-      baseGrowth = 0.2 + (dayRatio * 0.5);
-    } else if (dayRatio < 0.7) {
-      // Rapid middle growth (vegetative stage)
-      baseGrowth = 0.3 + (dayRatio - 0.2) * 1.2;
-    } else {
-      // Tapering final growth (reproductive & mature stages)
-      baseGrowth = 0.7 + (dayRatio - 0.7) * 0.6;
-    }
-    
-    // Factor in daily weather conditions
-    const growthMultiplier = day.growthFactor;
-    const adjustedGrowth = baseGrowth * (0.8 + growthMultiplier * 0.4);
-    
-    // Determine growth stage
-    let growthStage;
-    if (adjustedGrowth < 0.2) {
-      growthStage = 'SEEDLING';
-    } else if (adjustedGrowth < 0.6) {
-      growthStage = 'VEGETATIVE';
-    } else if (adjustedGrowth < 0.9) {
-      growthStage = 'REPRODUCTIVE';
-    } else {
-      growthStage = 'MATURE';
-    }
-    
-    return {
-      ...day,
-      growthPercent: Math.min(1, Math.max(0, adjustedGrowth)),
-      growthStage
-    };
-  });
+  // Generate weather data based on location
+  let weatherData;
+  if (location && location.latitude !== undefined && location.longitude !== undefined) {
+    const historicalWeather = generateHistoricalWeather(
+      location.latitude,
+      location.longitude,
+      startDate,
+      days
+    );
+    weatherData = convertToSimulationWeatherDays(historicalWeather);
+  } else {
+    // Fallback to generic weather data if location is not provided
+    weatherData = generateGenericWeatherData(days, startDate);
+  }
   
   return {
     type,
     hectares,
     density,
-    days: timelineData
+    location: location || null,
+    days: weatherData
   };
+};
+
+// Fallback function to generate generic weather data
+const generateGenericWeatherData = (days, startDate = new Date()) => {
+  const weatherData = [];
+  const currentDate = new Date(startDate);
+  
+  for (let i = 0; i < days; i++) {
+    const date = new Date(currentDate);
+    
+    // Get month to determine season
+    const month = date.getMonth();
+    
+    // Determine season
+    let season;
+    if (month >= 2 && month <= 4) season = 'spring';
+    else if (month >= 5 && month <= 7) season = 'summer';
+    else if (month >= 8 && month <= 10) season = 'fall';
+    else season = 'winter';
+    
+    // Base temperature
+    let baseTemp = 0;
+    switch (season) {
+      case 'spring': baseTemp = 15; break; // ~60°F
+      case 'summer': baseTemp = 25; break; // ~77°F
+      case 'fall': baseTemp = 18; break;   // ~64°F
+      case 'winter': baseTemp = 5; break;  // ~41°F
+    }
+    
+    // Random weather with seasonal influence
+    let weather;
+    const rand = Math.random();
+    
+    if (season === 'summer') {
+      if (rand < 0.5) weather = WEATHER_TYPES.SUNNY;
+      else if (rand < 0.8) weather = WEATHER_TYPES.PARTLY_CLOUDY;
+      else if (rand < 0.9) weather = WEATHER_TYPES.CLOUDY;
+      else weather = WEATHER_TYPES.RAINY;
+    } else if (season === 'winter') {
+      if (rand < 0.2) weather = WEATHER_TYPES.SUNNY;
+      else if (rand < 0.4) weather = WEATHER_TYPES.PARTLY_CLOUDY;
+      else if (rand < 0.7) weather = WEATHER_TYPES.CLOUDY;
+      else if (rand < 0.9) weather = WEATHER_TYPES.RAINY;
+      else weather = WEATHER_TYPES.STORMY;
+    } else {
+      // Spring and fall
+      if (rand < 0.3) weather = WEATHER_TYPES.SUNNY;
+      else if (rand < 0.6) weather = WEATHER_TYPES.PARTLY_CLOUDY;
+      else if (rand < 0.8) weather = WEATHER_TYPES.CLOUDY;
+      else if (rand < 0.95) weather = WEATHER_TYPES.RAINY;
+      else weather = WEATHER_TYPES.STORMY;
+    }
+    
+    // Adjust temp based on weather
+    let tempModifier = 0;
+    switch (weather) {
+      case WEATHER_TYPES.SUNNY: tempModifier = 5; break;
+      case WEATHER_TYPES.PARTLY_CLOUDY: tempModifier = 2; break;
+      case WEATHER_TYPES.CLOUDY: tempModifier = 0; break;
+      case WEATHER_TYPES.RAINY: tempModifier = -3; break;
+      case WEATHER_TYPES.STORMY: tempModifier = -5; break;
+    }
+    
+    // Random variation
+    const tempVariance = (Math.random() * 4) - 2; // -2 to +2 degrees
+    
+    // Generate humidity based on weather
+    let baseHumidity = 0;
+    switch (weather) {
+      case WEATHER_TYPES.SUNNY: baseHumidity = 30; break;
+      case WEATHER_TYPES.PARTLY_CLOUDY: baseHumidity = 45; break;
+      case WEATHER_TYPES.CLOUDY: baseHumidity = 60; break;
+      case WEATHER_TYPES.RAINY: baseHumidity = 80; break;
+      case WEATHER_TYPES.STORMY: baseHumidity = 90; break;
+    }
+    
+    // Add random variation to humidity
+    const humidityVariance = (Math.random() * 10) - 5; // -5 to +5 percent
+    
+    // Calculate growth factor based on conditions
+    const tempFactor = 1 - Math.abs(22 - (baseTemp + tempModifier + tempVariance)) / 22;
+    const sunFactor = weather === WEATHER_TYPES.SUNNY ? 1.0 : 
+                    weather === WEATHER_TYPES.PARTLY_CLOUDY ? 0.8 : 
+                    weather === WEATHER_TYPES.CLOUDY ? 0.6 : 
+                    weather === WEATHER_TYPES.RAINY ? 0.4 : 0.3;
+    const moistureFactor = Math.min(1.0, (baseHumidity + humidityVariance) / 70);
+    
+    // Calculate final growth factor
+    const growthFactor = (tempFactor * 0.4 + sunFactor * 0.3 + moistureFactor * 0.3);
+    
+    // Get weather settings
+    const settings = {
+      [WEATHER_TYPES.SUNNY]: {
+        skyColor: 0x87ceeb,
+        fogColor: 0xd7f0ff,
+        fogDensity: 0.0025,
+        lightIntensity: 1.0,
+        ambientIntensity: 0.6,
+        rainParticles: 0,
+        cloudOpacity: 0.8,
+        cloudCount: 10
+      },
+      [WEATHER_TYPES.PARTLY_CLOUDY]: {
+        skyColor: 0x87ceeb,
+        fogColor: 0xd7f0ff,
+        fogDensity: 0.003,
+        lightIntensity: 0.8,
+        ambientIntensity: 0.5,
+        rainParticles: 0,
+        cloudOpacity: 0.9,
+        cloudCount: 20
+      },
+      [WEATHER_TYPES.CLOUDY]: {
+        skyColor: 0xa3b5c7,
+        fogColor: 0xc7c7c7,
+        fogDensity: 0.004,
+        lightIntensity: 0.6,
+        ambientIntensity: 0.4,
+        rainParticles: 0,
+        cloudOpacity: 1.0,
+        cloudCount: 30
+      },
+      [WEATHER_TYPES.RAINY]: {
+        skyColor: 0x708090,
+        fogColor: 0xa3a3a3,
+        fogDensity: 0.006,
+        lightIntensity: 0.5,
+        ambientIntensity: 0.3,
+        rainParticles: 1000,
+        cloudOpacity: 1.0,
+        cloudCount: 35
+      },
+      [WEATHER_TYPES.STORMY]: {
+        skyColor: 0x4a5259,
+        fogColor: 0x7a7a7a,
+        fogDensity: 0.008,
+        lightIntensity: 0.4,
+        ambientIntensity: 0.2,
+        rainParticles: 2000,
+        cloudOpacity: 1.0,
+        cloudCount: 40
+      }
+    };
+    
+    weatherData.push({
+      date,
+      dayNumber: i + 1,
+      dateString: date.toLocaleDateString(),
+      weather,
+      temperature: Math.round((baseTemp + tempModifier + tempVariance) * 10) / 10,
+      humidity: Math.round(baseHumidity + humidityVariance),
+      growthFactor: Math.max(0, Math.min(1, growthFactor)),
+      settings: settings[weather]
+    });
+    
+    // Increment date by one day
+    currentDate.setDate(currentDate.getDate() + 1);
+  }
+  
+  return weatherData;
 };
 
 /**
@@ -123,6 +262,23 @@ export const updatePlantsForGrowthStage = (timelineDay, plants, cropType) => {
 };
 
 /**
+ * Determine growth stage based on growth percentage
+ * @param {number} growthPercent - Growth percentage (0-1)
+ * @returns {string} Growth stage
+ */
+export const determineGrowthStage = (growthPercent) => {
+  if (growthPercent < GROWTH_STAGES.SEEDLING) {
+    return 'SEEDLING';
+  } else if (growthPercent < GROWTH_STAGES.VEGETATIVE) {
+    return 'VEGETATIVE';
+  } else if (growthPercent < GROWTH_STAGES.REPRODUCTIVE) {
+    return 'REPRODUCTIVE';
+  } else {
+    return 'MATURE';
+  }
+};
+
+/**
  * Initialize timeline controls for the scene
  * @param {Object} timeline - Timeline data
  * @param {THREE.Scene} scene - The scene
@@ -144,6 +300,11 @@ export const initializeTimelineController = (timeline, scene, sceneObjects, setD
     if (dayIndex < 0 || dayIndex >= timeline.days.length) return;
     
     const dayData = timeline.days[dayIndex];
+    
+    // Determine growth stage if not already set
+    if (!dayData.growthStage) {
+      dayData.growthStage = determineGrowthStage(dayData.growthPercent);
+    }
     
     // Update plants
     if (sceneObjects.plants && sceneObjects.plants.length > 0) {

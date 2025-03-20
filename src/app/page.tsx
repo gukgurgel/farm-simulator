@@ -6,6 +6,7 @@ import { createSkybox, createTerrain, createClouds, animateClouds } from '../../
 import { createCropFieldSimulation } from '../../lib/simulation';
 import { createCropTimeline, initializeTimelineController } from '../../lib/simulation/timeline';
 import TimelineControls from '../../components/TimelineControls';
+import SimulationForm from '../../components/SimulationForm';
 import * as THREE from 'three';
 
 export default function Home() {
@@ -29,11 +30,15 @@ export default function Home() {
   const [currentSimulation, setCurrentSimulation] = useState(null);
   const [errorMessage, setErrorMessage] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [showSidebar, setShowSidebar] = useState(false);
   
   // Timeline state
   const [timelineController, setTimelineController] = useState(null);
   const [dayInfo, setDayInfo] = useState(null);
   const [totalDays, setTotalDays] = useState(90); // Default 3 months
+  
+  // Location state
+  const [location, setLocation] = useState(null);
   
   // Initialize the scene
   useEffect(() => {
@@ -112,11 +117,20 @@ export default function Home() {
           [-30, 0, 30],
           [30, 0, 30],
           [30, 0, -30]
-        ]
+        ],
+        location: {
+          latitude : -12.915559,
+          longitude : -55.314216,
+          name: 'Mato Grosso (Brazil)'
+        },
+        weatherSettings: {
+          useRealWeather: true
+        }
       };
       
       // This will trigger the simulation effect
       setCurrentSimulation(defaultSimParams);
+      setLocation(defaultSimParams.location);
     }, 100);
     
     // Cleanup on unmount
@@ -138,6 +152,70 @@ export default function Home() {
       });
     };
   }, []);
+  
+  // Handle file upload
+  const handleFileUpload = (event) => {
+    const file = event.target.files[0];
+    if (!file) return;
+    
+    setIsLoading(true);
+    setErrorMessage('');
+    
+    const reader = new FileReader();
+    
+    reader.onload = (e) => {
+      try {
+        const content = e.target.result;
+        const parsedData = JSON.parse(content);
+        
+        // Validate the parsed data
+        if (!parsedData.type) {
+          throw new Error("Missing required field: 'type'");
+        }
+        
+        if (!parsedData.hectares) {
+          throw new Error("Missing required field: 'hectares'");
+        }
+        
+        if (!parsedData.density) {
+          throw new Error("Missing required field: 'density'");
+        }
+        
+        if (!parsedData.polygon || !Array.isArray(parsedData.polygon) || parsedData.polygon.length < 3) {
+          throw new Error("Invalid or missing 'polygon' field. Must be an array with at least 3 vertices.");
+        }
+        
+        // Set location if provided
+        let simulationLocation = location;
+        if (parsedData.location) {
+          simulationLocation = parsedData.location;
+          setLocation(parsedData.location);
+        }
+        
+        // Create the simulation with the parsed data
+        setCurrentSimulation({
+          type: parsedData.type,
+          hectares: parseFloat(parsedData.hectares),
+          density: parseInt(parsedData.density),
+          polygon: parsedData.polygon,
+          location: simulationLocation,
+          weatherSettings: parsedData.weatherSettings || { useRealWeather: true }
+        });
+        
+      } catch (error) {
+        console.error("Error parsing file:", error);
+        setErrorMessage(`Error parsing file: ${error.message}`);
+        setIsLoading(false);
+      }
+    };
+    
+    reader.onerror = () => {
+      setErrorMessage("Error reading file");
+      setIsLoading(false);
+    };
+    
+    reader.readAsText(file);
+  };
   
   // Clear existing simulation and start a new one when parameters change
   useEffect(() => {
@@ -216,59 +294,11 @@ export default function Home() {
     }, 500);
   }, [currentSimulation]);
   
-  // Handle file upload
-  const handleFileUpload = (event) => {
-    const file = event.target.files[0];
-    if (!file) return;
-    
-    setIsLoading(true);
-    setErrorMessage('');
-    
-    const reader = new FileReader();
-    
-    reader.onload = (e) => {
-      try {
-        const content = e.target.result;
-        const parsedData = JSON.parse(content);
-        
-        // Validate the parsed data
-        if (!parsedData.type) {
-          throw new Error("Missing required field: 'type'");
-        }
-        
-        if (!parsedData.hectares) {
-          throw new Error("Missing required field: 'hectares'");
-        }
-        
-        if (!parsedData.density) {
-          throw new Error("Missing required field: 'density'");
-        }
-        
-        if (!parsedData.polygon || !Array.isArray(parsedData.polygon) || parsedData.polygon.length < 3) {
-          throw new Error("Invalid or missing 'polygon' field. Must be an array with at least 3 vertices.");
-        }
-        
-        // Create the simulation with the parsed data
-        setCurrentSimulation({
-          type: parsedData.type,
-          hectares: parseFloat(parsedData.hectares),
-          density: parseInt(parsedData.density),
-          polygon: parsedData.polygon
-        });
-        
-      } catch (error) {
-        console.error("Error parsing file:", error);
-        setErrorMessage(`Error parsing file: ${error.message}`);
-        setIsLoading(false);
-      }
-    };
-    
-    reader.onerror = () => {
-      setErrorMessage("Error reading file");
-      setIsLoading(false);
-    };
-    
-    reader.readAsText(file);
+  // Handle starting a new simulation
+  const handleStartSimulation = (simParams) => {
+    setCurrentSimulation(simParams);
+    setLocation(simParams.location);
+    setShowSidebar(false);
   };
   
   return (
@@ -277,10 +307,10 @@ export default function Home() {
       <div className="flex justify-between items-center p-4 bg-green-800 text-white">
         <div>
           <h1 className="text-2xl font-bold">3D Farm Crop Simulator</h1>
-          <p className="text-sm mt-1">Generate realistic crop simulations with proper hectare scaling</p>
+          <p className="text-sm mt-1">Generate realistic crop simulations with location-based weather</p>
         </div>
         
-        <div className="flex items-center">
+        <div className="flex items-center space-x-3">
           <input
             type="file"
             ref={fileInputRef}
@@ -295,6 +325,13 @@ export default function Home() {
           >
             {isLoading ? 'Loading...' : 'Load Simulation File'}
           </button>
+          
+          <button
+            onClick={() => setShowSidebar(!showSidebar)}
+            className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-400"
+          >
+            {showSidebar ? 'Hide Parameters' : 'Show Parameters'}
+          </button>
         </div>
       </div>
       
@@ -302,12 +339,18 @@ export default function Home() {
       {timelineController && (
         <TimelineControls 
           controller={timelineController} 
-          totalDays={totalDays} 
+          totalDays={totalDays}
+          location={location}
         />
       )}
       
       {/* Main content */}
       <div className="flex-1 relative">
+        {/* Simulation Form Sidebar */}
+        {showSidebar && (
+          <SimulationForm onStartSimulation={handleStartSimulation} />
+        )}
+        
         {/* 3D View */}
         <div className="w-full h-full">
           <div ref={mountRef} className="w-full h-full" />
