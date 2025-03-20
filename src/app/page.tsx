@@ -1,103 +1,345 @@
-import Image from "next/image";
+'use client'
+
+import React, { useState, useEffect, useRef } from 'react';
+import { setupScene } from '../../lib/simulation/sceneSetup';
+import { createSkybox, createTerrain, createClouds, animateClouds } from '../../lib/environment';
+import { createCropFieldSimulation } from '../../lib/simulation';
+import { createCropTimeline, initializeTimelineController } from '../../lib/simulation/timeline';
+import TimelineControls from '../../components/TimelineControls';
+import * as THREE from 'three';
 
 export default function Home() {
+  // Reference to the 3D container
+  const mountRef = useRef(null);
+  const fileInputRef = useRef(null);
+  
+  // Refs to hold three.js objects
+  const sceneRef = useRef(null);
+  const cameraRef = useRef(null);
+  const controlsRef = useRef(null);
+  const rendererRef = useRef(null);
+  const cloudsRef = useRef([]);
+  const simulationObjectsRef = useRef([]);
+  const lightRefs = useRef({
+    directional: null,
+    ambient: null
+  });
+  
+  // Current simulation state
+  const [currentSimulation, setCurrentSimulation] = useState(null);
+  const [errorMessage, setErrorMessage] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  
+  // Timeline state
+  const [timelineController, setTimelineController] = useState(null);
+  const [dayInfo, setDayInfo] = useState(null);
+  const [totalDays, setTotalDays] = useState(90); // Default 3 months
+  
+  // Initialize the scene
+  useEffect(() => {
+    if (!mountRef.current) return;
+    
+    // Setup THREE.js scene
+    const { scene, camera, renderer, controls, dispose } = setupScene(mountRef.current);
+    
+    // Store references
+    sceneRef.current = scene;
+    cameraRef.current = camera;
+    rendererRef.current = renderer;
+    controlsRef.current = controls;
+    
+    // Setup lights and store references
+    const ambientLight = new THREE.AmbientLight(0x404040, 0.6);
+    scene.add(ambientLight);
+    
+    const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
+    directionalLight.position.set(100, 200, 100);
+    directionalLight.castShadow = true;
+    directionalLight.shadow.camera.near = 0.5;
+    directionalLight.shadow.camera.far = 500;
+    directionalLight.shadow.camera.left = -100;
+    directionalLight.shadow.camera.right = 100;
+    directionalLight.shadow.camera.top = 100;
+    directionalLight.shadow.camera.bottom = -100;
+    directionalLight.shadow.mapSize.width = 2048;
+    directionalLight.shadow.mapSize.height = 2048;
+    scene.add(directionalLight);
+    
+    lightRefs.current = {
+      directional: directionalLight,
+      ambient: ambientLight
+    };
+    
+    // Create environment
+    createSkybox(scene);
+    createTerrain(scene);
+    
+    // Create clouds
+    cloudsRef.current = createClouds(scene, 20);
+    
+    // Animation loop
+    const animate = () => {
+      requestAnimationFrame(animate);
+      
+      // Animate clouds
+      animateClouds(cloudsRef.current);
+      
+      // Update rain if active
+      if (timelineController && timelineController.getCurrentDay && 
+          timelineController.getCurrentDay().settings && 
+          timelineController.getCurrentDay().settings.rainSystem) {
+        timelineController.getCurrentDay().settings.rainSystem.update();
+      }
+      
+      // Update controls
+      controls.update();
+      
+      // Render scene
+      renderer.render(scene, camera);
+    };
+    
+    // Start animation loop
+    animate();
+    
+    // Load a default simulation immediately
+    setTimeout(() => {
+      const defaultSimParams = {
+        type: 'soybean',
+        hectares: 1.5,  // Smaller field size for better density
+        density: 100,    // Higher density
+        polygon: [
+          [-30, 0, -30],
+          [-30, 0, 30],
+          [30, 0, 30],
+          [30, 0, -30]
+        ]
+      };
+      
+      // This will trigger the simulation effect
+      setCurrentSimulation(defaultSimParams);
+    }, 100);
+    
+    // Cleanup on unmount
+    return () => {
+      // Clean up timeline controller if exists
+      if (timelineController) {
+        timelineController.cleanup();
+      }
+      
+      dispose();
+      
+      // Clean up Three.js resources
+      scene.traverse((object) => {
+        if (object instanceof THREE.Mesh) {
+          object.geometry.dispose();
+          if (object.material.map) object.material.map.dispose();
+          object.material.dispose();
+        }
+      });
+    };
+  }, []);
+  
+  // Clear existing simulation and start a new one when parameters change
+  useEffect(() => {
+    if (!currentSimulation || !sceneRef.current || !cameraRef.current || !controlsRef.current) return;
+    
+    setIsLoading(true);
+    
+    // Small delay to ensure all references are properly set up
+    setTimeout(() => {
+      try {
+        // Remove all existing simulation objects
+        simulationObjectsRef.current.forEach(object => {
+          sceneRef.current.remove(object);
+        });
+        simulationObjectsRef.current = [];
+        
+        // Clean up previous timeline controller
+        if (timelineController) {
+          timelineController.cleanup();
+        }
+        
+        // Create new simulation
+        console.log("Creating simulation with params:", currentSimulation);
+        const { success, objects, error } = createCropFieldSimulation(
+          currentSimulation,
+          sceneRef.current,
+          cameraRef.current,
+          controlsRef.current
+        );
+        
+        if (success) {
+          console.log(`Created ${objects.length} simulation objects`);
+          simulationObjectsRef.current = objects;
+          
+          // Separate plants from other objects for growth animation
+          const plants = objects.filter(obj => {
+            // Use isPlant flag set during creation
+            return obj.userData && obj.userData.isPlant === true;
+          });
+          
+          console.log(`Identified ${plants.length} plant objects for growth animation`);
+          
+          // Create timeline starting March 20th
+          const startDate = new Date('2025-03-20');
+          const timeline = createCropTimeline(
+            currentSimulation,
+            startDate,
+            totalDays
+          );
+          
+          // Initialize timeline controller
+          const controller = initializeTimelineController(
+            timeline,
+            sceneRef.current,
+            {
+              directionalLight: lightRefs.current.directional,
+              ambientLight: lightRefs.current.ambient,
+              clouds: cloudsRef.current,
+              plants: plants
+            },
+            setDayInfo
+          );
+          
+          setTimelineController(controller);
+          setErrorMessage('');
+        } else {
+          console.error('Simulation error:', error);
+          setErrorMessage(`Error creating simulation: ${error}`);
+        }
+      } catch (err) {
+        console.error('Unexpected error in simulation creation:', err);
+        setErrorMessage(`Unexpected error: ${err.message}`);
+      } finally {
+        setIsLoading(false);
+      }
+    }, 500);
+  }, [currentSimulation]);
+  
+  // Handle file upload
+  const handleFileUpload = (event) => {
+    const file = event.target.files[0];
+    if (!file) return;
+    
+    setIsLoading(true);
+    setErrorMessage('');
+    
+    const reader = new FileReader();
+    
+    reader.onload = (e) => {
+      try {
+        const content = e.target.result;
+        const parsedData = JSON.parse(content);
+        
+        // Validate the parsed data
+        if (!parsedData.type) {
+          throw new Error("Missing required field: 'type'");
+        }
+        
+        if (!parsedData.hectares) {
+          throw new Error("Missing required field: 'hectares'");
+        }
+        
+        if (!parsedData.density) {
+          throw new Error("Missing required field: 'density'");
+        }
+        
+        if (!parsedData.polygon || !Array.isArray(parsedData.polygon) || parsedData.polygon.length < 3) {
+          throw new Error("Invalid or missing 'polygon' field. Must be an array with at least 3 vertices.");
+        }
+        
+        // Create the simulation with the parsed data
+        setCurrentSimulation({
+          type: parsedData.type,
+          hectares: parseFloat(parsedData.hectares),
+          density: parseInt(parsedData.density),
+          polygon: parsedData.polygon
+        });
+        
+      } catch (error) {
+        console.error("Error parsing file:", error);
+        setErrorMessage(`Error parsing file: ${error.message}`);
+        setIsLoading(false);
+      }
+    };
+    
+    reader.onerror = () => {
+      setErrorMessage("Error reading file");
+      setIsLoading(false);
+    };
+    
+    reader.readAsText(file);
+  };
+  
   return (
-    <div className="grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20 font-[family-name:var(--font-geist-sans)]">
-      <main className="flex flex-col gap-[32px] row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol className="list-inside list-decimal text-sm/6 text-center sm:text-left font-[family-name:var(--font-geist-mono)]">
-          <li className="mb-2 tracking-[-.01em]">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] px-1 py-0.5 rounded font-[family-name:var(--font-geist-mono)] font-semibold">
-              src/app/page.tsx
-            </code>
-            .
-          </li>
-          <li className="tracking-[-.01em]">
-            Save and see your changes instantly.
-          </li>
-        </ol>
-
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:w-auto"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
-            />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 w-full sm:w-auto md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read our docs
-          </a>
+    <div className="flex flex-col h-screen w-screen">
+      {/* Header */}
+      <div className="flex justify-between items-center p-4 bg-green-800 text-white">
+        <div>
+          <h1 className="text-2xl font-bold">3D Farm Crop Simulator</h1>
+          <p className="text-sm mt-1">Generate realistic crop simulations with proper hectare scaling</p>
         </div>
-      </main>
-      <footer className="row-start-3 flex gap-[24px] flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
+        
+        <div className="flex items-center">
+          <input
+            type="file"
+            ref={fileInputRef}
+            onChange={handleFileUpload}
+            accept=".json"
+            className="hidden"
           />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
-      </footer>
+          <button
+            onClick={() => fileInputRef.current.click()}
+            className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-500 focus:outline-none focus:ring-2 focus:ring-green-400"
+            disabled={isLoading}
+          >
+            {isLoading ? 'Loading...' : 'Load Simulation File'}
+          </button>
+        </div>
+      </div>
+      
+      {/* Timeline Controls */}
+      {timelineController && (
+        <TimelineControls 
+          controller={timelineController} 
+          totalDays={totalDays} 
+        />
+      )}
+      
+      {/* Main content */}
+      <div className="flex-1 relative">
+        {/* 3D View */}
+        <div className="w-full h-full">
+          <div ref={mountRef} className="w-full h-full" />
+        </div>
+        
+        {/* Error message */}
+        {errorMessage && (
+          <div className="absolute top-20 right-4 p-3 bg-red-600 text-white rounded shadow-lg max-w-md z-20">
+            <strong>Error:</strong> {errorMessage}
+            <button 
+              className="ml-3 text-white font-bold"
+              onClick={() => setErrorMessage('')}
+            >
+              ×
+            </button>
+          </div>
+        )}
+        
+        {/* Loading indicator */}
+        {isLoading && (
+          <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-30 z-30">
+            <div className="p-4 bg-white rounded shadow-lg">
+              <p className="text-lg font-bold">Loading simulation...</p>
+            </div>
+          </div>
+        )}
+      </div>
+      
+      {/* Info footer - smaller now that we have timeline controls */}
+      <div className="p-2 bg-green-700 text-white text-xs">
+        <p>Use your mouse to navigate: Left click + drag to rotate | Right click + drag to pan | Scroll to zoom</p>
+      </div>
     </div>
   );
 }
